@@ -1,0 +1,14 @@
+{
+    "jira": {
+        "host": "",
+        "user": "",
+        "pass": ""
+    },
+    "influxdb": {
+        "host": "localhost",
+        "port": 8086,
+        "user": "",
+        "pass": "",
+        "database": "jira"
+    }
+}
