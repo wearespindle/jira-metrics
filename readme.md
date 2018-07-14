@@ -1,4 +1,4 @@
-# Jira stats
+# Jira metrics
 
 This script collects all relevant data about our milestones from Jira and puts it into influxDB. It is intended to run every evening at 20:00, so a daily progress of the milestone will be gained.
 
