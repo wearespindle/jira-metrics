@@ -7,43 +7,43 @@ import json
 
 # json based config, mainly jira credentials and Influx credentials
 config_filepath = 'config.json'
-# Jira query to get the 
+# Jira query to get the epic tickets == milestones
 jql = 'project in (INFRA, VIALA, VIALJS, GRID, VIALI, VM) AND issuetype = Epic AND status = "In Progress"'
+# Number of jira issues to query per request
 jql_issue_count = 50
 
 
 def main(verbose=False, dryrun=False):
     # Get the config file.
-    try:
-        with open(config_filepath) as json_data_file:
-            config = json.load(json_data_file)
-    except IOError as e:
-        print 'Error: Could not find configuration file'
-        return 1
-    except ValueError as e:
-        print 'Error: Could not load json config: %s' % e.message
-        return 1
+    with open(config_filepath) as json_config_file:
+        config = json.load(json_config_file)
         
     # Get the Jira Influx points. These will be ready to be passed through to Influx.
-    json_body = get_jira_points(config, verbose, dryrun)
-    if json_body == False:
-        # Something went wrong
-        return 1
-    else:
-        # Connect to the Influxdb.
-        client = InfluxDBClient(
-            config['influxdb']['host'],
-            config['influxdb']['port'],
-            config['influxdb']['user'],
-            config['influxdb']['pass'],
-            config['influxdb']['database'],
-            timeout=10)
-        # Write the Influx points.
-        try:
-            client.write_points(json_body)
-        except InfluxDBClientError as e:
-            print 'Error: Influxerror: %s' % e.message
+    # Catching jira errors here, because the error messages consist of a whole webpage.
+    # Besides that: all 5 invocations of the JIRA api can throw a JIRAError.
+    try:
+        epics_json = get_jira_points(config, verbose, dryrun)
+    except JIRAError as e:
+        if e.status_code == 401:
+            print 'Error: Jira authorisation problem'
             return 1
+        elif e.status_code == 404:
+            print 'Error: Wrong jira url'
+            return 1
+        else:
+            raise
+    
+    # Connect to the Influxdb.
+    client = InfluxDBClient(
+        config['influxdb']['host'],
+        config['influxdb']['port'],
+        config['influxdb']['user'],
+        config['influxdb']['pass'],
+        config['influxdb']['database'],
+        timeout=10)
+    # Write the Influx points.
+    client.write_points(epics_json)
+    
     if dryrun:
         print 'Everything looks good!'
         
@@ -54,19 +54,10 @@ def get_jira_points(config, verbose=False, dryrun=False):
     It outputs data in infux (points) format. Verbose=True to output the Jira
     milestone information to the terminal.
     """
-    json_body = []
+    epics_json = []
     # Connect to jira
-    try:
-        jira_api = JIRA(config['jira']['host'], basic_auth=(config['jira']['user'], config['jira']['pass']), max_retries=0)
-    except JIRAError as e:
-        if e.status_code == 401:
-            print 'Error: Jira authorisation problem'
-            return False
-        elif e.status_code == 404:
-            print 'Error: Wrong jira url'
-            return False
-        else:
-            raise
+    jira_api = JIRA(config['jira']['host'], basic_auth=(config['jira']['user'], config['jira']['pass']), max_retries=0)
+    
     if dryrun:
         return []
 
@@ -89,30 +80,29 @@ def get_jira_points(config, verbose=False, dryrun=False):
         if len(epic.fields.fixVersions):
             version = jira_api.version(epic.fields.fixVersions[0].id)
         else:
-            version = False
+            version = None
         
         # Get all tickets within the epic. A maximum of 100 tickets and a
         # default of 50 tickets can be queried from Jira in 1 request.
         issues = jira_api.search_issues('"Epic link"=%s' % epic.key, maxResults=jql_issue_count)
         loopcount = issues.total/jql_issue_count + 1
-        total = issues.total
-        i = 1
-        while i < loopcount:
+        total_tickets = issues.total
+        for i in xrange(1, loopcount):
             issues.extend(jira_api.search_issues('"Epic link"=%s' % epic.key, startAt=jql_issue_count*i, maxResults=jql_issue_count))
             i += 1
         
         # Having all tickets, get all information about the tickets.
-        open = 0
-        resolved = 0
+        open_tickets = 0
+        resolved_tickets = 0
         for issue in issues:
             if issue.fields.timespent:
                 time_spent += issue.fields.timespent
             if issue.fields.timeestimate:
                 time_estimate += issue.fields.timeestimate
-            if issue.fields.status.name == ('Open', 'Reopened'):
-                open += 1
+            if issue.fields.status.name in ('Open', 'Reopened'):
+                open_tickets += 1
             elif issue.fields.status.name in ('Closed', 'Resolved', 'In Releasebranch'):
-                resolved += 1
+                resolved_tickets += 1
         
         # Print stuff if verbose.
         if verbose:
@@ -121,14 +111,14 @@ def get_jira_points(config, verbose=False, dryrun=False):
                 print 'startdate: %s, enddate: %s' % (version.startDate, version.releaseDate)
             print 'time spent: %d' % int(time_spent/3600)
             print 'time estimate: %d'% int(time_estimate/3600)
-            print 'total: %d' % total
-            print 'open: %d' % open
-            print 'in progress: %d' % (total - open - resolved)
-            print 'resolved: %d' % resolved
+            print 'total: %d' % total_tickets
+            print 'open: %d' % open_tickets
+            print 'in progress: %d' % (total_tickets - open_tickets - resolved_tickets)
+            print 'resolved: %d' % resolved_tickets
             print '------------------------'
         
         # Create the json.
-        json_body.append(
+        epics_json.append(
             {
                 "measurement": "milestone-hours",
                 "tags": {
@@ -142,7 +132,7 @@ def get_jira_points(config, verbose=False, dryrun=False):
                 }
             }
         )
-        json_body.append(
+        epics_json.append(
             {
                 "measurement": "milestone-tickets",
                 "tags": {
@@ -151,14 +141,14 @@ def get_jira_points(config, verbose=False, dryrun=False):
                     "milestone": epic.key
                 },
                 "fields": {
-                    "open": open,
-                    "progress": (total - open - resolved),
-                    "resolved": resolved
+                    "open": open_tickets,
+                    "progress": (total_tickets - open_tickets - resolved_tickets),
+                    "resolved": resolved_tickets
                 }
             }
         )
         if version:
-            json_body.append(
+            epics_json.append(
                 {
                     "measurement": "milestone-date",
                     "tags": {
@@ -172,7 +162,7 @@ def get_jira_points(config, verbose=False, dryrun=False):
                     }
                 }
             )
-    return json_body
+    return epics_json
 
 
 if __name__ == "__main__":
