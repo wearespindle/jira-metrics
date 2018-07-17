@@ -40,7 +40,9 @@ def main(verbose=False, dryrun=False):
         config['influxdb']['user'],
         config['influxdb']['pass'],
         config['influxdb']['database'],
-        timeout=10)
+        timeout=10,
+        ssl=True,
+        verify_ssl=True)
     # Write the Influx points.
     client.write_points(epics_json)
     
