@@ -1,0 +1,38 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: jira-metrics
+  namespace: jira-metrics
+spec:
+  schedule: "00 21 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 10
+  jobTemplate:
+    metadata:
+      labels:
+        cronjob: jira-metrics
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            cronjob: jira-metrics
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: jira-metrics-cronjob
+            image: voipgrid/jira-metrics
+            command: ["/usr/local/bin/python2"]
+            args: ["/app/main.py"]
+            #command: ["/bin/sh", "-c"]
+            #args: ["echo hello from $HOSTNAME!"]
+            volumeMounts:
+            - name: jira-metrics-config
+              mountPath: /etc/configdata
+          imagePullSecrets:
+            - name: dockerhub-voipgriduser
+          volumes:
+          - name: jira-metrics-config
+            configMap:
+              name: jira-metrics-config
