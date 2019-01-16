@@ -1,12 +1,9 @@
+import os
 import argparse
 from influxdb import InfluxDBClient
-from influxdb.exceptions import InfluxDBClientError
 from jira import JIRA
 from jira.exceptions import JIRAError
-import json
 
-# json based config, mainly jira credentials and Influx credentials
-#config_filepath = 'config.json'
 # Use ENV settings instead
 # JIRA
 JIRA_HOST = os.getenv('JIRA_HOST')
@@ -26,15 +23,11 @@ jql_issue_count = 50
 
 
 def main(verbose=False, dryrun=False):
-    # Get the config file.
-    with open(config_filepath) as json_config_file:
-        config = json.load(json_config_file)
-
     # Get the Jira Influx points. These will be ready to be passed through to Influx.
     # Catching jira errors here, because the error messages consist of a whole webpage.
     # Besides that: all 5 invocations of the JIRA api can throw a JIRAError.
     try:
-        epics_json = get_jira_points(config, verbose, dryrun)
+        epics_json = get_jira_points(verbose, dryrun)
     except JIRAError as e:
         if e.status_code == 401:
             print 'Error: Jira authorisation problem'
@@ -47,11 +40,11 @@ def main(verbose=False, dryrun=False):
 
     # Connect to the Influxdb.
     client = InfluxDBClient(
-        config['influxdb']['host'],
-        config['influxdb']['port'],
-        config['influxdb']['user'],
-        config['influxdb']['pass'],
-        config['influxdb']['database'],
+        INFLUXDB_HOST,
+        INFLUXDB_PORT,
+        INFLUXDB_USER,
+        INFLUXDB_PASS,
+        INFLUXDB_DATABASE,
         timeout=10,
         ssl=True,
         verify_ssl=True)
@@ -62,7 +55,7 @@ def main(verbose=False, dryrun=False):
         print 'Everything looks good!'
 
 
-def get_jira_points(config, verbose=False, dryrun=False):
+def get_jira_points(verbose=False, dryrun=False):
     """
     This function needs the configuration file containing the Jira connection.
     It outputs data in influx (points) format. Verbose=True to output the Jira
@@ -70,7 +63,7 @@ def get_jira_points(config, verbose=False, dryrun=False):
     """
     epics_json = []
     # Connect to jira
-    jira_api = JIRA(config['jira']['host'], basic_auth=(config['jira']['user'], config['jira']['pass']), max_retries=0)
+    jira_api = JIRA(JIRA_HOST, basic_auth=(JIRA_USER, JIRA_PASS), max_retries=0)
 
     if dryrun:
         return []
@@ -99,10 +92,11 @@ def get_jira_points(config, verbose=False, dryrun=False):
         # Get all tickets within the epic. A maximum of 100 tickets and a
         # default of 50 tickets can be queried from Jira in 1 request.
         issues = jira_api.search_issues('"Epic link"=%s' % epic.key, maxResults=jql_issue_count)
-        loopcount = issues.total/jql_issue_count + 1
+        loopcount = issues.total / jql_issue_count + 1
         total_tickets = issues.total
         for i in xrange(1, loopcount):
-            issues.extend(jira_api.search_issues('"Epic link"=%s' % epic.key, startAt=jql_issue_count*i, maxResults=jql_issue_count))
+            issues.extend(jira_api.search_issues('"Epic link"=%s' % epic.key, startAt=jql_issue_count * i,
+                          maxResults=jql_issue_count))
             i += 1
 
         # Having all tickets, get all information about the tickets.
@@ -123,8 +117,8 @@ def get_jira_points(config, verbose=False, dryrun=False):
             print '%s (%s)' % (epic.fields.customfield_10501, epic.key)
             if version:
                 print 'startdate: %s, enddate: %s' % (version.startDate, version.releaseDate)
-            print 'time spent: %d' % int(time_spent/3600)
-            print 'time estimate: %d'% int(time_estimate/3600)
+            print 'time spent: %d' % int(time_spent / 3600)
+            print 'time estimate: %d' % int(time_estimate / 3600)
             print 'total: %d' % total_tickets
             print 'open: %d' % open_tickets
             print 'in progress: %d' % (total_tickets - open_tickets - resolved_tickets)
@@ -141,8 +135,8 @@ def get_jira_points(config, verbose=False, dryrun=False):
                     "milestone": epic.key
                 },
                 "fields": {
-                    "time_spent": time_spent/3600,
-                    "time_estimate": time_estimate/3600
+                    "time_spent": time_spent / 3600,
+                    "time_estimate": time_estimate / 3600
                 }
             }
         )
